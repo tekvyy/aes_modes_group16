@@ -10,7 +10,6 @@
 //! Seriously, ECB is NOT secure. Don't use it irl. We are implementing it here to understand _why_
 //! it is not secure and make the point that the most straight-forward approach isn't always the
 //! best, and can sometimes be trivially broken.
-
 use aes::{
 	cipher::{generic_array::GenericArray, BlockCipher, BlockDecrypt, BlockEncrypt, KeyInit},
 	Aes128,
@@ -21,9 +20,23 @@ use rand::{thread_rng, Rng};
 const BLOCK_SIZE: usize = 16;
 
 fn main() {
-	// ctr_encrypt(vec![1,1,1,1,1,1,1,1], [8; 16]);
-	// todo!("Maybe this should be a library crate. TBD");
+	let key = [0u8; BLOCK_SIZE];
+    let plain_text = b"Hello, world! This is a test message.".to_vec();
+
+    let encrypted = cbc_encrypt(plain_text.clone(), key);
+    println!("Encrypted: {:?}", encrypted);
+
+    let decrypted = cbc_decrypt(encrypted, key);
+    println!("Decrypted: {:?}", String::from_utf8(decrypted).unwrap());
+
+	let ctr_encrypted = ctr_encrypt(plain_text.clone(), key);
+	println!("Encrypted: {:?}", ctr_encrypted);
+
+	let ctr_decrypted = ctr_decrypt(ctr_encrypted, key);
+	println!("Decrypted: {:?}", ctr_decrypted.iter().map(|c| *c as char).collect::<String>());
+
 }
+
 
 /// Simple AES encryption
 /// Helper function to make the core AES block cipher easier to understand.
@@ -102,7 +115,14 @@ fn un_group(blocks: Vec<[u8; BLOCK_SIZE]>) -> Vec<u8> {
 
 /// Does the opposite of the pad function.
 fn un_pad(data: Vec<u8>) -> Vec<u8> {
-	todo!()
+	// todo!()
+	if let Some(&last_byte) = data.last() {
+        let pad_size = last_byte as usize;
+        if pad_size <= BLOCK_SIZE {
+            return data[..data.len() - pad_size].to_vec();
+        }
+    }
+    data
 }
 
 /// The first mode we will implement is the Electronic Code Book, or ECB mode.
@@ -133,15 +153,55 @@ fn ecb_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 /// You will need to generate a random initialization vector (IV) to encrypt the
 /// very first block because it doesn't have a previous block. Typically this IV
 /// is inserted as the first block of ciphertext.
-fn cbc_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
-	// Remember to generate a random initialization vector for the first block.
 
-	todo!()
-}
+	fn cbc_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
+		let plain_text = pad(plain_text);
+		let blocks = group(plain_text);
+	
+		let iv: [u8; BLOCK_SIZE] = rand::thread_rng().gen();
+		let mut prev_block = iv;
+	
+		let mut cipher_text = Vec::from(iv);
+	
+		for block in blocks {
+			let mut xor_block = [0u8; BLOCK_SIZE];
+			for (i, &byte) in block.iter().enumerate() {
+				xor_block[i] = byte ^ prev_block[i];
+			}
+			let encrypted_block = aes_encrypt(xor_block, &key);
+			cipher_text.extend_from_slice(&encrypted_block);
+			prev_block = encrypted_block;
+		}
+	
+		cipher_text
+		// todo!()
+	}
+	
 
-fn cbc_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
-	todo!()
-}
+
+
+	
+	fn cbc_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
+		let iv: [u8; BLOCK_SIZE] = cipher_text[..BLOCK_SIZE].try_into().unwrap();
+		let cipher_blocks = group(cipher_text[BLOCK_SIZE..].to_vec());
+	
+		let mut plain_text = Vec::new();
+		let mut prev_block = iv;
+	
+		for block in cipher_blocks {
+			let decrypted_block = aes_decrypt(block, &key);
+			let mut xor_block = [0u8; BLOCK_SIZE];
+			for (i, &byte) in decrypted_block.iter().enumerate() {
+				xor_block[i] = byte ^ prev_block[i];
+			}
+			plain_text.extend_from_slice(&xor_block);
+			prev_block = block;
+		}
+	
+		un_pad(plain_text)
+		// todo!()
+	}
+
 
 /// Another mode which you can implement on your own is counter mode.
 /// This mode is secure as well, and is used in real world applications.
@@ -162,9 +222,10 @@ fn cbc_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 
 fn ctr_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 	// Remember to generate a random nonce
+	let plain_text = pad(plain_text);
 	let mut cipher_text: Vec<u8> = Vec::new();
-	let mut nonce = [0u8; BLOCK_SIZE];
-	thread_rng().fill(&mut nonce[..BLOCK_SIZE / 2]);
+	let mut nonce = [0u8; BLOCK_SIZE /2 ];
+	thread_rng().fill(&mut nonce[..BLOCK_SIZE /2]);
 
 	cipher_text.extend_from_slice(&nonce); 
 
@@ -175,7 +236,7 @@ fn ctr_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 		
 		let mut ctr_block = nonce.to_vec();
 
-		ctr_block.extend_from_slice(&(counter as u64).to_le_bytes()[..BLOCK_SIZE / 2]);
+		ctr_block.extend_from_slice(&(counter as u64).to_le_bytes()[..BLOCK_SIZE/2]);
 		let ctr_block_array: [u8; BLOCK_SIZE] = ctr_block.try_into().unwrap();
 
 		let encrypted_ctr = aes_encrypt(ctr_block_array, &key);
@@ -195,20 +256,28 @@ fn ctr_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 fn ctr_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 
 	let mut plain_text: Vec<u8> = Vec::new();
-	let nonce = cipher_text[..BLOCK_SIZE].to_vec(); // Extract nonce
+	let nonce = cipher_text[..BLOCK_SIZE /2].to_vec(); 
 
-	let blocks: Vec<u8> = cipher_text[BLOCK_SIZE..].chunks(BLOCK_SIZE).map(|b| b.try_into().unwrap()).collect();
+	// let blocks: Vec<u8> = cipher_text[BLOCK_SIZE..].chunks(BLOCK_SIZE).map(|b| b.try_into().unwrap()).collect();
+
+	let mut blocks: Vec<[u8; 16]> = Vec::new();
+	let mut remaining = &cipher_text[BLOCK_SIZE..];
+	while remaining.len() >= BLOCK_SIZE {
+		let block = remaining[..BLOCK_SIZE].try_into().unwrap();
+		blocks.push(block);
+		remaining = &remaining[BLOCK_SIZE..];
+	}
 	let mut counter = 1;
 
 	for block in blocks.iter() {
-		
+
 		let mut ctr_block = nonce.to_vec();
 		ctr_block.extend_from_slice(&(counter as u64).to_le_bytes()[..BLOCK_SIZE / 2]);
 
-		let mut ctr_block_array: [u8; BLOCK_SIZE] = ctr_block.try_into().unwrap();
+		let ctr_block_array: [u8; BLOCK_SIZE] = ctr_block.try_into().unwrap();
 		let encrypted_ctr = aes_encrypt(ctr_block_array, &key);
-		let mut xor_block: Vec<u8> = Vec::with_capacity(block.into().len());
-		for (a, b) in block.into().iter().zip(encrypted_ctr.iter()) {
+		let mut xor_block: Vec<u8> = Vec::with_capacity(block.len());
+		for (a, b) in block.iter().zip(encrypted_ctr.iter()) {
 			xor_block.push(a ^ b);
 		}
 
@@ -216,5 +285,5 @@ fn ctr_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 		counter += 1;
 	}
 
-	plain_text
+	un_pad(plain_text)
 }
