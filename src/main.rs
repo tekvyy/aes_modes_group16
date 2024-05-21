@@ -15,12 +15,14 @@ use aes::{
 	cipher::{generic_array::GenericArray, BlockCipher, BlockDecrypt, BlockEncrypt, KeyInit},
 	Aes128,
 };
+use rand::{thread_rng, Rng};
 
 ///We're using AES 128 which has 16-byte (128 bit) blocks.
 const BLOCK_SIZE: usize = 16;
 
 fn main() {
-	todo!("Maybe this should be a library crate. TBD");
+	// ctr_encrypt(vec![1,1,1,1,1,1,1,1], [8; 16]);
+	// todo!("Maybe this should be a library crate. TBD");
 }
 
 /// Simple AES encryption
@@ -157,11 +159,62 @@ fn cbc_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 ///
 /// Once again, you will need to generate a random nonce which is 64 bits long. This should be
 /// inserted as the first block of the ciphertext.
+
 fn ctr_encrypt(plain_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
 	// Remember to generate a random nonce
-	todo!()
-}
+	let mut cipher_text: Vec<u8> = Vec::new();
+	let mut nonce = [0u8; BLOCK_SIZE];
+	thread_rng().fill(&mut nonce[..BLOCK_SIZE / 2]);
 
+	cipher_text.extend_from_slice(&nonce); 
+
+	let blocks = group(plain_text);
+	let mut counter = 1; 
+
+	for block in blocks.iter() {
+		
+		let mut ctr_block = nonce.to_vec();
+
+		ctr_block.extend_from_slice(&(counter as u64).to_le_bytes()[..BLOCK_SIZE / 2]);
+		let ctr_block_array: [u8; BLOCK_SIZE] = ctr_block.try_into().unwrap();
+
+		let encrypted_ctr = aes_encrypt(ctr_block_array, &key);
+
+		let mut xor_block: Vec<u8> = Vec::with_capacity(block.len());
+		for (a, b) in block.iter().zip(encrypted_ctr.iter()) {
+			xor_block.push(a ^ b);
+		}
+
+		cipher_text.extend_from_slice(&xor_block);
+		counter += 1;
+	}
+
+	cipher_text
+}
+	
 fn ctr_decrypt(cipher_text: Vec<u8>, key: [u8; BLOCK_SIZE]) -> Vec<u8> {
-	todo!()
+
+	let mut plain_text: Vec<u8> = Vec::new();
+	let nonce = cipher_text[..BLOCK_SIZE].to_vec(); // Extract nonce
+
+	let blocks: Vec<u8> = cipher_text[BLOCK_SIZE..].chunks(BLOCK_SIZE).map(|b| b.try_into().unwrap()).collect();
+	let mut counter = 1;
+
+	for block in blocks.iter() {
+		
+		let mut ctr_block = nonce.to_vec();
+		ctr_block.extend_from_slice(&(counter as u64).to_le_bytes()[..BLOCK_SIZE / 2]);
+
+		let mut ctr_block_array: [u8; BLOCK_SIZE] = ctr_block.try_into().unwrap();
+		let encrypted_ctr = aes_encrypt(ctr_block_array, &key);
+		let mut xor_block: Vec<u8> = Vec::with_capacity(block.into().len());
+		for (a, b) in block.into().iter().zip(encrypted_ctr.iter()) {
+			xor_block.push(a ^ b);
+		}
+
+		plain_text.extend_from_slice(&xor_block);
+		counter += 1;
+	}
+
+	plain_text
 }
